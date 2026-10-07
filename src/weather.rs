@@ -1,6 +1,7 @@
-//! Optional live weather from OpenWeather's current-weather API. Off unless
-//! `OPENWEATHER_API_KEY` is set; the key is read from the environment only
-//! and never shown, logged or written anywhere.
+//! Optional live weather from OpenWeather's current-weather API. Off until
+//! there's a key: entered on the Settings screen (saved to `almanac.key`, see
+//! `settings`) or set as `OPENWEATHER_API_KEY`, which wins when both exist.
+//! The key is never shown, logged or put in the settings file.
 //!
 //!     OPENWEATHER_API_KEY=…            your key
 //!     ALMANAC_LOCATION=Chicago,US   a city (name,country) or "lat,lon"
@@ -111,7 +112,7 @@ impl std::fmt::Debug for Config {
 /// `Ok(None)` when weather is off (no key); `Err` when it's half set up.
 /// `location` (from the settings screen) wins over `ALMANAC_LOCATION`.
 pub fn config(location: &str, units: Units) -> Result<Option<Config>, String> {
-    let Some(key) = std::env::var("OPENWEATHER_API_KEY").ok().filter(|k| !k.trim().is_empty()) else { return Ok(None) };
+    let Some((key, _)) = key() else { return Ok(None) };
     let location = Location::parse(location)
         .or_else(|| std::env::var("ALMANAC_LOCATION").ok().and_then(|l| Location::parse(&l)))
         .ok_or("set a location in Settings (a city like Chicago,US, or lat,lon)")?;
@@ -137,9 +138,25 @@ pub fn preview() -> Option<Conditions> {
     Some(Conditions { kind, cover, intensity: 0.7 })
 }
 
-/// Whether a key is present, without reading it anywhere else.
-pub fn has_key() -> bool {
-    std::env::var("OPENWEATHER_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+/// Where the key in use came from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum KeySource {
+    Env,
+    Saved,
+}
+
+/// The key to use: the environment's, else the one saved from Settings.
+fn key() -> Option<(String, KeySource)> {
+    std::env::var("OPENWEATHER_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .map(|k| (k, KeySource::Env))
+        .or_else(|| crate::settings::load_key().map(|k| (k, KeySource::Saved)))
+}
+
+/// Where the key comes from, if there is one, without handing it out.
+pub fn key_source() -> Option<KeySource> {
+    key().map(|(_, source)| source)
 }
 
 /// OpenWeather condition codes → what to draw.
