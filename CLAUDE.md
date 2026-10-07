@@ -1,4 +1,4 @@
-# Desk Clock
+# Almanac
 
 A native desktop app on [ferrite-design](https://github.com/rwetz/ferrite-design)
 (GPUI, Rust), started from the `minimal` template.

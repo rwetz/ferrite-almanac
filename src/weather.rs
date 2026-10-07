@@ -3,7 +3,7 @@
 //! and never shown, logged or written anywhere.
 //!
 //!     OPENWEATHER_API_KEY=…            your key
-//!     DESK_CLOCK_LOCATION=Chicago,US   a city (name,country) or "lat,lon"
+//!     ALMANAC_LOCATION=Chicago,US   a city (name,country) or "lat,lon"
 //!
 //! The location and units can also be set on the Settings screen.
 
@@ -109,18 +109,18 @@ impl std::fmt::Debug for Config {
 }
 
 /// `Ok(None)` when weather is off (no key); `Err` when it's half set up.
-/// `location` (from the settings screen) wins over `DESK_CLOCK_LOCATION`.
+/// `location` (from the settings screen) wins over `ALMANAC_LOCATION`.
 pub fn config(location: &str, units: Units) -> Result<Option<Config>, String> {
     let Some(key) = std::env::var("OPENWEATHER_API_KEY").ok().filter(|k| !k.trim().is_empty()) else { return Ok(None) };
     let location = Location::parse(location)
-        .or_else(|| std::env::var("DESK_CLOCK_LOCATION").ok().and_then(|l| Location::parse(&l)))
+        .or_else(|| std::env::var("ALMANAC_LOCATION").ok().and_then(|l| Location::parse(&l)))
         .ok_or("set a location in Settings (a city like Chicago,US, or lat,lon)")?;
     Ok(Some(Config { key: key.trim().to_string(), location, units }))
 }
 
-/// A sky to preview without a key: `DESK_CLOCK_SKY=rain` and so on.
+/// A sky to preview without a key: `ALMANAC_SKY=rain` and so on.
 pub fn preview() -> Option<Conditions> {
-    let kind = match std::env::var("DESK_CLOCK_SKY").ok()?.to_lowercase().as_str() {
+    let kind = match std::env::var("ALMANAC_SKY").ok()?.to_lowercase().as_str() {
         "clear" => Kind::Clear,
         "clouds" | "cloudy" => Kind::Clouds,
         "rain" => Kind::Rain,

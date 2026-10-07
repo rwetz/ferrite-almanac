@@ -1,4 +1,4 @@
-//! Desk Clock: a Ferrite clock to leave open on a second screen.
+//! Almanac: a Ferrite clock to leave open on a second screen.
 //!
 //! Big block-font digits over their own dead "segments", a seconds rail,
 //! the moon's phase in dither, a looping ASCII sky for the part of the
@@ -8,7 +8,7 @@
 //!     cargo run
 //!     cargo run -- --settings           # open straight into Settings
 //!     OPENWEATHER_API_KEY=… cargo run   # then set a location in Settings
-//!     DESK_CLOCK_SKY=snow cargo run     # preview a sky: clear clouds rain snow fog storm
+//!     ALMANAC_SKY=snow cargo run     # preview a sky: clear clouds rain snow fog storm
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -42,7 +42,7 @@ const WEATHER_RETRY: Duration = Duration::from_secs(2 * 60);
 const APPEARANCES: [(&str, &str); 3] = [("dark", "Dark"), ("light", "Light"), ("system", "System")];
 const FPS: [u32; 4] = [25, 60, 120, 240];
 
-struct DeskClock {
+struct Almanac {
     now: NaiveDateTime,
     settings: Settings,
     settings_open: bool,
@@ -63,7 +63,7 @@ struct DeskClock {
     _appearance: Subscription,
 }
 
-impl DeskClock {
+impl Almanac {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Wake on each whole second, so the digits change with the wall clock.
         cx.spawn(async move |this, cx| {
@@ -256,7 +256,7 @@ impl DeskClock {
         cx.notify();
     }
 
-    /// The weather the sky shows: live, or a `DESK_CLOCK_SKY` preview.
+    /// The weather the sky shows: live, or a `ALMANAC_SKY` preview.
     fn conditions(&self) -> Option<Conditions> {
         self.weather.as_ref().map(|w| w.conditions).or_else(weather::preview)
     }
@@ -400,7 +400,7 @@ impl DeskClock {
     }
 }
 
-impl Render for DeskClock {
+impl Render for Almanac {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette(cx);
         let now = self.now;
@@ -517,7 +517,7 @@ impl Render for DeskClock {
                 }))
                 .child(self.palette.clone())
                 .child(self.toaster.clone())
-                .child(title_bar("Desk Clock").child(gear))
+                .child(title_bar("Almanac").child(gear))
                 .child(
                     div()
                         .flex()
@@ -542,17 +542,17 @@ impl Render for DeskClock {
     }
 }
 
-gpui::actions!(desk_clock, [OpenSettings]);
+gpui::actions!(almanac, [OpenSettings]);
 
 fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         ferrite_design::init(Appearance::Dark, cx);
         cx.bind_keys([KeyBinding::new("ctrl-shift-p", TogglePalette, None), KeyBinding::new("ctrl-,", OpenSettings, None)]);
-        let options = chrome::window_options("Desk Clock", size(px(1120.), px(760.)), cx);
+        let options = chrome::window_options("Almanac", size(px(1120.), px(760.)), cx);
         cx.open_window(options, |window, cx| {
             chrome::square_corners(window);
             chrome::power_off_on_close(window, cx);
-            cx.new(|cx| DeskClock::new(window, cx))
+            cx.new(|cx| Almanac::new(window, cx))
         })
         .expect("failed to open the window");
         cx.activate(true);

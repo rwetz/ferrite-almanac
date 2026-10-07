@@ -1,7 +1,7 @@
 [package]
-name = "ferrite-desk-clock"
+name = "ferrite-almanac"
 version = "0.1.0"
-description = "A Ferrite desk clock: block digits, the moon in dither, an ASCII sky and an almanac ticker."
+description = "A Ferrite almanac for a second screen: block-digit clock, the moon in dither, a live ASCII weather sky."
 edition = "2024"
 rust-version = "1.88"
 

@@ -1,5 +1,5 @@
 //! The clock's own settings, saved as plain `key = value` lines in
-//! `<config>/ferrite/desk-clock.conf`. The OpenWeather key is not one of
+//! `<config>/ferrite/almanac.conf`. The OpenWeather key is not one of
 //! them: it only ever comes from the environment.
 
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ pub struct Settings {
     pub h24: bool,
     pub blink: bool,
     pub seconds: bool,
-    /// Overrides `DESK_CLOCK_LOCATION` when set.
+    /// Overrides `ALMANAC_LOCATION` when set.
     pub location: String,
     pub units: Units,
 }
@@ -67,7 +67,7 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "# Desk Clock settings. The OpenWeather key is read from OPENWEATHER_API_KEY only.\n\
+            "# Almanac settings. The OpenWeather key is read from OPENWEATHER_API_KEY only.\n\
              scheme = {}\nappearance = {}\nfps = {}\nhours = {}\nblink = {}\nseconds = {}\nlocation = {}\nunits = {}\n",
             self.scheme,
             self.appearance,
@@ -90,7 +90,7 @@ impl Settings {
                 .map(PathBuf::from)
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         };
-        base.map(|b| b.join("ferrite").join("desk-clock.conf"))
+        base.map(|b| b.join("ferrite").join("almanac.conf"))
     }
 
     pub fn load() -> Self {
