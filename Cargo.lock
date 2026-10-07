@@ -1580,7 +1580,7 @@ dependencies = [
 [[package]]
 name = "ferrite-design"
 version = "0.1.0"
-source = "git+https://github.com/rwetz/ferrite-design?rev=19c103ba3ffb83b8fff94dbd376fb3768c1f2156#19c103ba3ffb83b8fff94dbd376fb3768c1f2156"
+source = "git+https://github.com/rwetz/ferrite-design?rev=0b13d8087942fd4dc65c2a62ef19bdf60f7547e7#0b13d8087942fd4dc65c2a62ef19bdf60f7547e7"
 dependencies = [
  "anyhow",
  "gpui-pre",
