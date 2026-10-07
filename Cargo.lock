@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "ferrite-almanac"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "ferrite-design",
@@ -1580,7 +1580,7 @@ dependencies = [
 [[package]]
 name = "ferrite-design"
 version = "0.1.0"
-source = "git+https://github.com/rwetz/ferrite-design?rev=ebf7ee99f6265fc81875f0c798aba8a4e306e160#ebf7ee99f6265fc81875f0c798aba8a4e306e160"
+source = "git+https://github.com/rwetz/ferrite-design?rev=19c103ba3ffb83b8fff94dbd376fb3768c1f2156#19c103ba3ffb83b8fff94dbd376fb3768c1f2156"
 dependencies = [
  "anyhow",
  "gpui-pre",

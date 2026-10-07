@@ -16,6 +16,9 @@ pub struct Settings {
     pub h24: bool,
     pub blink: bool,
     pub seconds: bool,
+    /// The sky in natural colours (blue rain, a yellow sun, green hills);
+    /// off draws it in the scheme's one dim ink.
+    pub sky_colors: bool,
     /// Overrides `ALMANAC_LOCATION` when set.
     pub location: String,
     pub units: Units,
@@ -30,6 +33,7 @@ impl Default for Settings {
             h24: true,
             blink: true,
             seconds: true,
+            sky_colors: true,
             location: String::new(),
             units: Units::Metric,
         }
@@ -58,6 +62,7 @@ impl Settings {
                 "hours" => s.h24 = v != "12",
                 "blink" => s.blink = flag(v, s.blink),
                 "seconds" => s.seconds = flag(v, s.seconds),
+                "sky_colors" => s.sky_colors = flag(v, s.sky_colors),
                 "location" => s.location = v.into(),
                 "units" => s.units = if v == "imperial" { Units::Imperial } else { Units::Metric },
                 _ => {}
@@ -69,13 +74,14 @@ impl Settings {
     pub fn serialize(&self) -> String {
         format!(
             "# Almanac settings. The OpenWeather key is kept in almanac.key, not here.\n\
-             scheme = {}\nappearance = {}\nfps = {}\nhours = {}\nblink = {}\nseconds = {}\nlocation = {}\nunits = {}\n",
+             scheme = {}\nappearance = {}\nfps = {}\nhours = {}\nblink = {}\nseconds = {}\nsky_colors = {}\nlocation = {}\nunits = {}\n",
             self.scheme,
             self.appearance,
             self.fps,
             if self.h24 { 24 } else { 12 },
             self.blink,
             self.seconds,
+            self.sky_colors,
             self.location,
             if self.units == Units::Imperial { "imperial" } else { "metric" },
         )
@@ -169,6 +175,7 @@ mod tests {
             h24: false,
             blink: false,
             seconds: false,
+            sky_colors: false,
             location: "Chicago,US".into(),
             units: Units::Imperial,
         };

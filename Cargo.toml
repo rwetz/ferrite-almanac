@@ -1,6 +1,6 @@
 [package]
 name = "ferrite-almanac"
-version = "0.1.1"
+version = "0.2.0"
 description = "A Ferrite almanac for a second screen: block-digit clock, the moon in dither, a live ASCII weather sky."
 authors = ["Ryan Wetzstein"]
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
-ferrite-design = { git = "https://github.com/rwetz/ferrite-design", rev = "ebf7ee99f6265fc81875f0c798aba8a4e306e160" }
+ferrite-design = { git = "https://github.com/rwetz/ferrite-design", rev = "19c103ba3ffb83b8fff94dbd376fb3768c1f2156" }
 # Must match ferrite-design exactly (PITFALLS §1).
 gpui = { package = "gpui-pre", version = "=0.3.8" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8" }
