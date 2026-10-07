@@ -3,11 +3,12 @@
 //! Big block-font digits over their own dead "segments", a seconds rail,
 //! the moon's phase in dither, a looping ASCII sky for the part of the
 //! day, the month, and a ticker of almanac facts. With an OpenWeather key
-//! the sky shows the real weather and the day follows the real sun.
+//! (entered in Settings, which opens by itself on first launch) the sky shows
+//! the real weather and the day follows the real sun.
 //!
 //!     cargo run
 //!     cargo run -- --settings           # open straight into Settings
-//!     OPENWEATHER_API_KEY=… cargo run   # then set a location in Settings
+//!     OPENWEATHER_API_KEY=… cargo run   # a key from the environment wins over the saved one
 //!     ALMANAC_SKY=snow cargo run     # preview a sky: clear clouds rain snow fog storm
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -29,7 +30,7 @@ use gpui::{
 
 use almanac::{Moon, Part};
 use settings::Settings;
-use weather::{Conditions, Units, Weather};
+use weather::{Conditions, KeySource, Units, Weather};
 
 /// One font pixel of the big digits, and the gap carved out of it.
 const PIXEL: f32 = 20.;
@@ -57,9 +58,11 @@ struct Almanac {
     /// The polling loop; replacing it cancels the old one.
     weather_task: Option<Task<()>>,
     location: Entity<TextInput>,
+    api_key: Entity<TextInput>,
     palette: Entity<CommandPalette>,
     toaster: Entity<Toaster>,
     _location: Subscription,
+    _api_key: Subscription,
     _appearance: Subscription,
 }
 
@@ -92,11 +95,34 @@ impl Almanac {
             }
         });
 
+        let api_key = cx.new(|cx| {
+            let mut input = TextInput::new(window, cx).placeholder("Paste your OpenWeather key").prompt(">").masked(true);
+            if let Some(key) = settings::load_key() {
+                input.set_value(key, cx);
+            }
+            input
+        });
+        let _api_key = cx.subscribe(&api_key, |this: &mut Self, input, ev: &InputEvent, cx| {
+            if matches!(ev, InputEvent::Submit) {
+                let value = input.read(cx).value().to_string();
+                let t = match settings::save_key(&value) {
+                    Ok(()) if value.trim().is_empty() => toast("Weather key removed"),
+                    Ok(()) => toast("Weather key saved").success(),
+                    Err(err) => toast("Couldn't save the weather key").danger().message(err),
+                };
+                this.toaster.update(cx, |toaster, cx| toaster.push(t, cx));
+                this.restart_weather(cx);
+            }
+        });
+        // First launch with no key anywhere: open Settings on the key field
+        // once. Weather is optional, so it's a drawer to close, not a gate.
+        let first_run = !Settings::exists() && weather::key_source().is_none();
+
         let now = Local::now().naive_local();
         let mut clock = Self {
             now,
             settings,
-            settings_open: std::env::args().any(|a| a == "--settings"),
+            settings_open: first_run || std::env::args().any(|a| a == "--settings"),
             ghost: almanac::ghost(5),
             sky: Rc::from(Vec::new()),
             sky_key: None,
@@ -104,9 +130,11 @@ impl Almanac {
             weather_note: None,
             weather_task: None,
             location,
+            api_key,
             palette: cx.new(|cx| CommandPalette::new(window, cx)),
             toaster: cx.new(|_| Toaster::new()),
             _location,
+            _api_key,
             _appearance: theme::follow_system(window),
         };
         clock.apply_look(window, cx);
@@ -116,6 +144,11 @@ impl Almanac {
         clock.set_commands(cx);
         clock.restart_weather(cx);
         clock.redraw_sky();
+        if first_run {
+            // Saving now is what makes this happen only once.
+            clock.save(cx);
+            clock.api_key.update(cx, |input, cx| input.focus(window, cx));
+        }
         clock
     }
 
@@ -325,11 +358,16 @@ impl Almanac {
                 });
             }
         };
-        let weather_status: SharedString = match (weather::has_key(), &self.weather, &self.weather_note) {
-            (false, _, _) => "Off: no OPENWEATHER_API_KEY in the environment.".into(),
-            (true, _, Some(note)) => note.clone().into(),
-            (true, Some(w), None) => format!("On: {} at {}.", w.description, w.place).into(),
-            (true, None, None) => "Fetching…".into(),
+        let key_source = weather::key_source();
+        let weather_status: SharedString = match (key_source, &self.weather, &self.weather_note) {
+            (None, _, _) => "Off: add an OpenWeather key below for live weather.".into(),
+            (Some(_), _, Some(note)) => note.clone().into(),
+            (Some(_), Some(w), None) => format!("On: {} at {}.", w.description, w.place).into(),
+            (Some(_), None, None) => "Fetching…".into(),
+        };
+        let key_hint = match key_source {
+            Some(KeySource::Env) => "OPENWEATHER_API_KEY is set and wins over this",
+            _ => "Free at openweathermap.org · Enter to save, clear to remove",
         };
 
         drawer("settings")
@@ -385,6 +423,7 @@ impl Almanac {
             )
             .child(rule(Some("weather"), window, cx))
             .child(div().body(text::SM).text_color(hsla(p.fg_dim)).child(weather_status))
+            .child(field("api-key", "API key").hint(key_hint).stacked().child(self.api_key.clone()))
             .child(field("location", "Location").hint("Press Enter to apply").stacked().child(self.location.clone()))
             .child(
                 field("units", "Units").child(
