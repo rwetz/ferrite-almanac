@@ -1,0 +1,19 @@
+[package]
+name = "ferrite-desk-clock"
+version = "0.1.0"
+description = "A Ferrite desk clock: block digits, the moon in dither, an ASCII sky and an almanac ticker."
+edition = "2024"
+rust-version = "1.88"
+
+[dependencies]
+ferrite-design = { git = "https://github.com/rwetz/ferrite-design", rev = "8129fdb50032cc6ec91c1c4ae9a86059870e3b26" }
+# Must match ferrite-design exactly (PITFALLS §1).
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8" }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde_json = "1"
+ureq = "3"
+
+# gpui is sluggish unoptimised; optimise dependencies even in dev builds.
+[profile.dev.package."*"]
+opt-level = 3
