@@ -41,7 +41,7 @@ jobs:
           mkdir -p "$name/licenses"
           bin="target/${{ matrix.target }}/release/ferrite-almanac"
           [ -f "$bin.exe" ] && bin="$bin.exe"
-          cp "$bin" CHANGELOG.md "$name/"
+          cp "$bin" README.md LICENSE NOTICE CHANGELOG.md "$name/"
           # The font licenses ship with ferrite-design's source in cargo's git checkout.
           fonts=$(find ~/.cargo/git/checkouts -path '*ferrite-design*/assets/fonts' -type d | head -1)
           cp "$fonts"/LICENSE-* "$name/licenses/"
