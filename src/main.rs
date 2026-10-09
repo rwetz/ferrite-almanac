@@ -2,13 +2,12 @@
 //!
 //! Big block-font digits over their own dead "segments", a seconds rail,
 //! the moon's phase in dither, a looping ASCII sky for the part of the
-//! day, the month, and a ticker of almanac facts. With an OpenWeather key
+//! day, the month, and a ticker of almanac facts. With a location set
 //! (entered in Settings, which opens by itself on first launch) the sky shows
 //! the real weather and the day follows the real sun.
 //!
 //!     cargo run
 //!     cargo run -- --settings           # open straight into Settings
-//!     OPENWEATHER_API_KEY=… cargo run   # a key from the environment wins over the saved one
 //!     ALMANAC_SKY=snow cargo run     # preview a sky: clear clouds rain snow fog storm
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -30,7 +29,7 @@ use gpui::{
 
 use almanac::{Moon, Part};
 use settings::Settings;
-use weather::{Conditions, KeySource, Units, Weather};
+use weather::{Conditions, Units, Weather};
 
 /// One font pixel of the big digits, and the gap carved out of it.
 const PIXEL: f32 = 20.;
@@ -51,18 +50,16 @@ struct Almanac {
     /// The sky film and what it was drawn for.
     sky: Rc<[dither::Picture]>,
     sky_key: Option<(Part, u32, Option<Conditions>)>,
-    /// Live weather, when a key is set and the last fetch worked.
+    /// Live weather, when a location is set and the last fetch worked.
     weather: Option<Weather>,
     /// Why there's no weather, when it was asked for: setup or fetch trouble.
     weather_note: Option<String>,
     /// The polling loop; replacing it cancels the old one.
     weather_task: Option<Task<()>>,
     location: Entity<TextInput>,
-    api_key: Entity<TextInput>,
     palette: Entity<CommandPalette>,
     toaster: Entity<Toaster>,
     _location: Subscription,
-    _api_key: Subscription,
     _appearance: Subscription,
 }
 
@@ -95,28 +92,7 @@ impl Almanac {
             }
         });
 
-        let api_key = cx.new(|cx| {
-            let mut input = TextInput::new(window, cx).placeholder("Paste your OpenWeather key").prompt(">").masked(true);
-            if let Some(key) = settings::load_key() {
-                input.set_value(key, cx);
-            }
-            input
-        });
-        let _api_key = cx.subscribe(&api_key, |this: &mut Self, input, ev: &InputEvent, cx| {
-            if matches!(ev, InputEvent::Submit) {
-                let value = input.read(cx).value().to_string();
-                let t = match settings::save_key(&value) {
-                    Ok(()) if value.trim().is_empty() => toast("Weather key removed"),
-                    Ok(()) => toast("Weather key saved").success(),
-                    Err(err) => toast("Couldn't save the weather key").danger().message(err),
-                };
-                this.toaster.update(cx, |toaster, cx| toaster.push(t, cx));
-                this.restart_weather(cx);
-            }
-        });
-        // First launch with no key anywhere: open Settings on the key field
-        // once. Weather is optional, so it's a drawer to close, not a gate.
-        let first_run = !Settings::exists() && weather::key_source().is_none();
+        let first_run = !Settings::exists();
 
         let now = Local::now().naive_local();
         let mut clock = Self {
@@ -130,24 +106,31 @@ impl Almanac {
             weather_note: None,
             weather_task: None,
             location,
-            api_key,
             palette: cx.new(|cx| CommandPalette::new(window, cx)),
             toaster: cx.new(|_| Toaster::new()),
             _location,
-            _api_key,
             _appearance: theme::follow_system(window),
         };
+        // Shared launch defaults apply until this app has saved its own preferences.
         clock.apply_look(window, cx);
-        // Lodestone hands over its shared look as FERRITE_* variables; when
-        // launched that way, those win over the saved settings.
         theme::apply_env(cx);
+        if Settings::path().is_some_and(|path| path.exists()) {
+            clock.apply_look(window, cx);
+        } else {
+            clock.settings.scheme = theme::scheme(cx).key.into();
+            clock.settings.appearance = match theme::appearance(cx) {
+                Appearance::Light => "light", Appearance::System => "system", Appearance::Dark => "dark",
+            }.into();
+            clock.settings.fps = motion::fps();
+            clock.apply_look(window, cx);
+        }
         clock.set_commands(cx);
         clock.restart_weather(cx);
         clock.redraw_sky();
         if first_run {
             // Saving now is what makes this happen only once.
             clock.save(cx);
-            clock.api_key.update(cx, |input, cx| input.focus(window, cx));
+            clock.location.update(cx, |input, cx| input.focus(window, cx));
         }
         clock
     }
@@ -348,7 +331,6 @@ impl Almanac {
     fn settings_drawer(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = palette(cx);
         let s = &self.settings;
-        let scheme_index = SCHEMES.iter().position(|sc| sc.key == s.scheme);
         let close = {
             let weak = cx.weak_entity();
             move |_: &mut Window, cx: &mut App| {
@@ -358,16 +340,11 @@ impl Almanac {
                 });
             }
         };
-        let key_source = weather::key_source();
-        let weather_status: SharedString = match (key_source, &self.weather, &self.weather_note) {
-            (None, _, _) => "Off: add an OpenWeather key below for live weather.".into(),
-            (Some(_), _, Some(note)) => note.clone().into(),
-            (Some(_), Some(w), None) => format!("On: {} at {}.", w.description, w.place).into(),
-            (Some(_), None, None) => "Fetching…".into(),
-        };
-        let key_hint = match key_source {
-            Some(KeySource::Env) => "OPENWEATHER_API_KEY is set and wins over this",
-            _ => "Free at openweathermap.org · Enter to save, clear to remove",
+        let weather_status: SharedString = match (&self.weather, &self.weather_note) {
+            (_, Some(note)) => note.clone().into(),
+            (Some(w), None) => format!("Open-Meteo: {} at {}.", w.description, w.place).into(),
+            (None, None) if self.settings.location.trim().is_empty() => "Enter a location for live weather. No API key needed.".into(),
+            (None, None) => "Fetching from Open-Meteo…".into(),
         };
 
         drawer("settings")
@@ -376,15 +353,12 @@ impl Almanac {
             .width(px(420.))
             .on_close(close)
             .child(rule(Some("look"), window, cx))
-            .child(
-                field("scheme", "Scheme").child(
-                    select("scheme-select")
-                        .options(SCHEMES.iter().map(|sc| sc.name))
-                        .selected(scheme_index)
-                        .width(px(220.))
-                        .on_change(cx.listener(|this, i: &usize, window, cx| this.change(|s| s.scheme = SCHEMES[*i].key.into(), window, cx))),
-                ),
-            )
+            .child(rule(Some("scheme"), window, cx))
+            .children(SCHEMES.iter().map(|scheme| {
+                Button::new(gpui::ElementId::Name(format!("settings-scheme-{}", scheme.key).into())).label(scheme.name).secondary()
+                    .selected(s.scheme == scheme.key)
+                    .on_click(cx.listener(move |this, _, window, cx| this.change(|s| s.scheme = scheme.key.into(), window, cx)))
+            }))
             .child(
                 field("appearance", "Appearance").child(
                     APPEARANCES.iter().fold(segmented("appearance-seg"), |seg, (_, label)| seg.option(*label))
@@ -423,7 +397,6 @@ impl Almanac {
             )
             .child(rule(Some("weather"), window, cx))
             .child(div().body(text::SM).text_color(hsla(p.fg_dim)).child(weather_status))
-            .child(field("api-key", "API key").hint(key_hint).stacked().child(self.api_key.clone()))
             .child(field("location", "Location").hint("Press Enter to apply").stacked().child(self.location.clone()))
             .child(
                 field("units", "Units").child(
@@ -461,7 +434,7 @@ impl Render for Almanac {
                 .py_4()
                 .child(readout)
                 .when(self.settings.seconds, |col| col.child(self.seconds(cx)))
-                .child(div().display(Scale::X1, window).text_color(hsla(p.fg_dim)).child(now.format("%A · %d %b %Y").to_string().to_uppercase())),
+                .child(div().display(Scale::X1, window).text_color(hsla(p.fg_dim)).child(now.format("%A Â· %d %b %Y").to_string().to_uppercase())),
         );
 
         let disc = dither::Picture::from_fn(64, 64, move |u, v| moon.shade(u * 2. - 1., v * 2. - 1.).unwrap_or(0.));
@@ -482,14 +455,14 @@ impl Render for Almanac {
         );
 
         let sky_meta = match &self.weather {
-            Some(w) => format!("{} · {:.0}{}", part.label(), w.temp, w.units.temp()),
+            Some(w) => format!("{} Â· {:.0}{}", part.label(), w.temp, w.units.temp()),
             None => part.label().to_string(),
         };
         let report: Option<(bool, String)> = match (&self.weather, &self.weather_note) {
             (Some(w), note) => Some((
                 note.is_some(),
                 format!(
-                    "{} · {} · feels {:.0}{} · wind {:.0} {} · {}% humidity",
+                    "{} Â· {} Â· feels {:.0}{} Â· wind {:.0} {} Â· {}% humidity",
                     w.place,
                     w.description,
                     w.feels,
@@ -532,7 +505,7 @@ impl Render for Almanac {
             div().flex().justify_center().child(ascii_cal(now.year(), now.month()).today(Some(now.day()))),
         );
 
-        let gear = Button::new("open-settings").icon(Icon::Sliders).ghost().small().tooltip("Settings · Ctrl+,").on_click(cx.listener(
+        let gear = Button::new("open-settings").icon(Icon::Sliders).ghost().small().tooltip("Settings Â· Ctrl+,").on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings_open = !this.settings_open;
                 cx.notify();

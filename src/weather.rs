@@ -1,12 +1,4 @@
-//! Optional live weather from OpenWeather's current-weather API. Off until
-//! there's a key: entered on the Settings screen (saved to `almanac.key`, see
-//! `settings`) or set as `OPENWEATHER_API_KEY`, which wins when both exist.
-//! The key is never shown, logged or put in the settings file.
-//!
-//!     OPENWEATHER_API_KEY=…            your key
-//!     ALMANAC_LOCATION=Chicago,US   a city (name,country) or "lat,lon"
-//!
-//! The location and units can also be set on the Settings screen.
+//! Key-free live weather from Open-Meteo.
 
 use serde_json::Value;
 
@@ -37,13 +29,6 @@ pub enum Units {
 }
 
 impl Units {
-    fn api(self) -> &'static str {
-        match self {
-            Units::Metric => "metric",
-            Units::Imperial => "imperial",
-        }
-    }
-
     pub fn temp(self) -> &'static str {
         match self {
             Units::Metric => "°C",
@@ -95,28 +80,19 @@ impl Location {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Config {
-    key: String,
     pub location: Location,
     pub units: Units,
 }
 
-impl std::fmt::Debug for Config {
-    // Never print the key.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Config").field("location", &self.location).field("units", &self.units).finish_non_exhaustive()
-    }
-}
-
-/// `Ok(None)` when weather is off (no key); `Err` when it's half set up.
-/// `location` (from the settings screen) wins over `ALMANAC_LOCATION`.
 pub fn config(location: &str, units: Units) -> Result<Option<Config>, String> {
-    let Some((key, _)) = key() else { return Ok(None) };
-    let location = Location::parse(location)
-        .or_else(|| std::env::var("ALMANAC_LOCATION").ok().and_then(|l| Location::parse(&l)))
-        .ok_or("set a location in Settings (a city like Chicago,US, or lat,lon)")?;
-    Ok(Some(Config { key: key.trim().to_string(), location, units }))
+    let raw = if location.trim().is_empty() { std::env::var("ALMANAC_LOCATION").unwrap_or_default() } else { location.into() };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let location = Location::parse(&raw).ok_or("invalid coordinates; latitude must be -90..90 and longitude -180..180")?;
+    Ok(Some(Config { location, units }))
 }
 
 /// A sky to preview without a key: `ALMANAC_SKY=rain` and so on.
@@ -138,137 +114,120 @@ pub fn preview() -> Option<Conditions> {
     Some(Conditions { kind, cover, intensity: 0.7 })
 }
 
-/// Where the key in use came from.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum KeySource {
-    Env,
-    Saved,
-}
-
-/// The key to use: the environment's, else the one saved from Settings.
-fn key() -> Option<(String, KeySource)> {
-    std::env::var("OPENWEATHER_API_KEY")
-        .ok()
-        .filter(|k| !k.trim().is_empty())
-        .map(|k| (k, KeySource::Env))
-        .or_else(|| crate::settings::load_key().map(|k| (k, KeySource::Saved)))
-}
-
-/// Where the key comes from, if there is one, without handing it out.
-pub fn key_source() -> Option<KeySource> {
-    key().map(|(_, source)| source)
-}
-
-/// OpenWeather condition codes → what to draw.
-/// <https://openweathermap.org/weather-conditions>
-pub fn kind_of(id: u64) -> Kind {
-    match id {
-        200..=299 => Kind::Storm,
-        300..=399 | 500..=599 => Kind::Rain,
-        600..=699 => Kind::Snow,
-        700..=799 => Kind::Fog,
-        801..=899 => Kind::Clouds,
+/// WMO codes used by Open-Meteo.
+pub fn kind_of(code: u64) -> Kind {
+    match code {
+        1..=3 => Kind::Clouds,
+        45 | 48 => Kind::Fog,
+        51..=67 | 80..=82 => Kind::Rain,
+        71..=77 | 85 | 86 => Kind::Snow,
+        95..=99 => Kind::Storm,
         _ => Kind::Clear,
     }
 }
 
-/// How hard rain or snow falls, from the code's position in its band
-/// (OpenWeather orders them light → extreme).
-fn intensity_of(id: u64) -> f32 {
-    match id {
-        300 | 500 | 520 | 600 | 615 | 620 => 0.3,
-        301 | 310 | 311 | 501 | 521 | 601 | 616 | 621 => 0.6,
-        200..=299 => 0.8,
-        300..=699 => 0.9,
-        _ => 0.,
-    }
-}
-
-/// Parse a current-weather response.
 pub fn parse(json: &str, units: Units) -> Result<Weather, String> {
-    let v: Value = serde_json::from_str(json).map_err(|e| format!("bad response: {e}"))?;
-    let w = v["weather"].get(0).ok_or("no weather in response")?;
-    let id = w["id"].as_u64().ok_or("no condition code")?;
-    let num = |p: &str| v.pointer(p).and_then(Value::as_f64);
+    let v: Value = serde_json::from_str(json).map_err(|_| "Open-Meteo sent invalid JSON")?;
+    if v["error"].as_bool() == Some(true) {
+        return Err("Open-Meteo refused the request".into());
+    }
+    let c = &v["current"];
+    let number = |name: &str| c[name].as_f64().ok_or_else(|| format!("missing {name} in weather response"));
+    let code = c["weather_code"].as_u64().ok_or("missing weather code")?;
+    let kind = kind_of(code);
+    let description = match kind {
+        Kind::Clear => "clear",
+        Kind::Clouds => "cloudy",
+        Kind::Fog => "fog",
+        Kind::Rain => "rain",
+        Kind::Snow => "snow",
+        Kind::Storm => "thunderstorm",
+    };
+    let precipitation = c["precipitation"].as_f64().unwrap_or(0.);
     Ok(Weather {
         conditions: Conditions {
-            kind: kind_of(id),
-            cover: (num("/clouds/all").unwrap_or(0.) / 100.) as f32,
-            intensity: intensity_of(id),
+            kind,
+            cover: (number("cloud_cover")? / 100.).clamp(0., 1.) as f32,
+            intensity: if matches!(kind, Kind::Rain | Kind::Snow | Kind::Storm) { (precipitation / 5.).clamp(0.2, 1.) as f32 } else { 0. },
         },
-        place: v["name"].as_str().unwrap_or("").to_string(),
-        description: w["description"].as_str().unwrap_or("").to_string(),
-        temp: num("/main/temp").ok_or("no temperature")? as f32,
-        feels: num("/main/feels_like").unwrap_or(0.) as f32,
-        humidity: num("/main/humidity").unwrap_or(0.) as u32,
-        wind: num("/wind/speed").unwrap_or(0.) as f32,
-        sunrise: num("/sys/sunrise").unwrap_or(0.) as i64,
-        sunset: num("/sys/sunset").unwrap_or(0.) as i64,
+        place: String::new(),
+        description: description.into(),
+        temp: number("temperature_2m")? as f32,
+        feels: number("apparent_temperature")? as f32,
+        humidity: number("relative_humidity_2m")? as u32,
+        wind: number("wind_speed_10m")? as f32,
+        sunrise: v["daily"]["sunrise"][0].as_i64().ok_or("missing sunrise")?,
+        sunset: v["daily"]["sunset"][0].as_i64().ok_or("missing sunset")?,
         units,
     })
 }
 
-/// Fetch the current weather (blocking; call it off the main thread).
-/// Errors are written without the request URL, which holds the key.
+fn get(req: ureq::RequestBuilder<ureq::typestate::WithoutBody>) -> Result<String, String> {
+    let mut response = req
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .build()
+        .call()
+        .map_err(|_| "couldn't reach Open-Meteo".to_string())?;
+    response.body_mut().read_to_string().map_err(|_| "couldn't read Open-Meteo response".into())
+}
+
 pub fn fetch(cfg: &Config) -> Result<Weather, String> {
-    let mut req = ureq::get("https://api.openweathermap.org/data/2.5/weather")
-        .query("appid", &cfg.key)
-        .query("units", cfg.units.api());
-    req = match &cfg.location {
-        Location::City(q) => req.query("q", q),
-        Location::Coords(lat, lon) => req.query("lat", lat.to_string()).query("lon", lon.to_string()),
+    let (place, lat, lon) = match &cfg.location {
+        Location::Coords(lat, lon) => (format!("{lat:.2}, {lon:.2}"), *lat, *lon),
+        Location::City(query) => {
+            let mut parts = query.split(',');
+            let name = parts.next().unwrap_or(query).trim();
+            let country = parts.next().map(str::trim).filter(|s| s.len() == 2);
+            let mut req = ureq::get("https://geocoding-api.open-meteo.com/v1/search").query("name", name).query("count", "1");
+            if let Some(country) = country {
+                req = req.query("countryCode", country.to_uppercase());
+            }
+            let json: Value = serde_json::from_str(&get(req)?).map_err(|_| "invalid geocoding response")?;
+            let r = json["results"].get(0).ok_or("no matching location")?;
+            (
+                r["name"].as_str().unwrap_or(name).to_string(),
+                r["latitude"].as_f64().ok_or("missing latitude")?,
+                r["longitude"].as_f64().ok_or("missing longitude")?,
+            )
+        }
     };
-    let mut resp = req.call().map_err(|e| match e {
-        ureq::Error::StatusCode(401) => "OpenWeather rejected the key (new keys take a few hours to activate)".to_string(),
-        ureq::Error::StatusCode(404) => "OpenWeather doesn't know that location".to_string(),
-        ureq::Error::StatusCode(429) => "OpenWeather rate limit; retrying later".to_string(),
-        ureq::Error::StatusCode(code) => format!("OpenWeather returned HTTP {code}"),
-        _ => "couldn't reach OpenWeather".to_string(),
-    })?;
-    let body = resp.body_mut().read_to_string().map_err(|_| "couldn't read OpenWeather's response".to_string())?;
-    parse(&body, cfg.units)
+    let req = ureq::get("https://api.open-meteo.com/v1/forecast")
+        .query("latitude", lat.to_string())
+        .query("longitude", lon.to_string())
+        .query("current", "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,cloud_cover,precipitation")
+        .query("daily", "sunrise,sunset")
+        .query("timezone", "auto")
+        .query("timeformat", "unixtime")
+        .query("forecast_days", "1")
+        .query("temperature_unit", if cfg.units == Units::Imperial { "fahrenheit" } else { "celsius" })
+        .query("wind_speed_unit", if cfg.units == Units::Imperial { "mph" } else { "ms" });
+    let mut weather = parse(&get(req)?, cfg.units)?;
+    weather.place = place;
+    Ok(weather)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const SAMPLE: &str = r#"{"coord":{"lon":-87.65,"lat":41.85},
-        "weather":[{"id":501,"main":"Rain","description":"moderate rain","icon":"10n"}],
-        "main":{"temp":12.3,"feels_like":11.1,"humidity":82},"wind":{"speed":4.1},
-        "clouds":{"all":90},"sys":{"sunrise":1791374400,"sunset":1791415800},"name":"Chicago"}"#;
-
     #[test]
-    fn parses_a_response() {
-        let w = parse(SAMPLE, Units::Metric).unwrap();
+    fn parses_current_and_unix_sun_times() {
+        let json = r#"{"current":{"temperature_2m":12.3,"apparent_temperature":11.1,"relative_humidity_2m":82,"wind_speed_10m":4.1,"weather_code":63,"cloud_cover":90,"precipitation":3},"daily":{"sunrise":[1791374400],"sunset":[1791415800]}}"#;
+        let w = parse(json, Units::Metric).unwrap();
         assert_eq!(w.conditions, Conditions { kind: Kind::Rain, cover: 0.9, intensity: 0.6 });
-        assert_eq!((w.place.as_str(), w.description.as_str(), w.humidity), ("Chicago", "moderate rain", 82));
         assert_eq!((w.temp, w.feels, w.wind), (12.3, 11.1, 4.1));
         assert_eq!((w.sunrise, w.sunset), (1791374400, 1791415800));
+        assert!(parse("{}", Units::Metric).is_err());
+        assert!(parse("not JSON", Units::Metric).is_err());
     }
-
     #[test]
-    fn rejects_junk() {
-        assert!(parse("not json", Units::Metric).is_err());
-        assert!(parse(r#"{"weather":[]}"#, Units::Metric).is_err());
+    fn wmo_codes_cover_each_sky() {
+        assert_eq!([0, 3, 45, 63, 73, 95].map(kind_of), [Kind::Clear, Kind::Clouds, Kind::Fog, Kind::Rain, Kind::Snow, Kind::Storm]);
     }
-
     #[test]
-    fn codes_map_to_skies() {
-        assert_eq!([211, 300, 502, 601, 741, 800, 804].map(kind_of), [Kind::Storm, Kind::Rain, Kind::Rain, Kind::Snow, Kind::Fog, Kind::Clear, Kind::Clouds]);
-    }
-
-    #[test]
-    fn locations() {
-        assert_eq!(Location::parse("41.88, -87.63"), Some(Location::Coords(41.88, -87.63)));
-        assert_eq!(Location::parse("Chicago,US"), Some(Location::City("Chicago,US".into())));
+    fn locations_are_validated() {
         assert_eq!(Location::parse("91,0"), None);
-        assert_eq!(Location::parse("  "), None);
-    }
-
-    #[test]
-    fn debug_hides_the_key() {
-        let cfg = Config { key: "s3cret".into(), location: Location::City("X".into()), units: Units::Metric };
-        assert!(!format!("{cfg:?}").contains("s3cret"));
+        assert_eq!(Location::parse("NaN,0"), None);
+        assert_eq!(Location::parse("41.88,-87.63"), Some(Location::Coords(41.88, -87.63)));
     }
 }

@@ -20,7 +20,7 @@
 Almanac is a clock you leave open on a spare monitor. Big block digits sit
 over their own dim segments, a seconds rail ticks underneath, the moon shows
 its real phase, and a looping ASCII sky follows the part of the day. With a
-free OpenWeather key the sky shows the actual weather outside, and dawn and
+location set the sky shows the actual weather outside, and dawn and
 dusk follow the real sunrise and sunset.
 
 It's a native desktop app built with [GPUI](https://gpui.rs) and
@@ -81,28 +81,21 @@ xcodebuild -downloadComponent MetalToolchain
 Weather is optional. Without it the sky still runs through the day using
 your clock. To turn it on:
 
-1. Get a free API key at [openweathermap.org](https://openweathermap.org/api)
-   (the free "Current Weather" plan is enough). New keys can take a few hours
-   to start working.
-2. Open Settings. On first launch it opens by itself. Paste the key into
-   **API key** and press <kbd>Enter</kbd>.
-3. Enter a **Location**, either a city like `Chicago,US` or coordinates like
-   `41.88,-87.63`, and press <kbd>Enter</kbd>.
+1. Open Settings and enter a **Location**, such as `Chicago,US` or `41.88,-87.63`.
+2. Press **Enter**. Live weather comes from [Open-Meteo](https://open-meteo.com/), with no API key.
 
-The key is stored on its own, never in the settings file, so you can share or
-sync your settings without leaking it. Clearing the field and pressing
-<kbd>Enter</kbd> deletes it. Almanac asks for the weather every ten minutes.
+Almanac refreshes every ten minutes. Clear the location to turn live weather off,
+unless `ALMANAC_LOCATION` is set.
 
 ## Configuration
 
-Settings are saved as plain `key = value` lines, with the key in a separate
-file next to them:
+Settings are saved as plain `key = value` lines:
 
-| OS | Settings | Key |
-|---|---|---|
-| Windows | `%APPDATA%\ferrite\almanac.conf` | `%APPDATA%\ferrite\almanac.key` |
-| macOS | `~/Library/Application Support/ferrite/almanac.conf` | `…/ferrite/almanac.key` |
-| Linux | `$XDG_CONFIG_HOME/ferrite/almanac.conf` (or `~/.config/…`) | `…/ferrite/almanac.key` (mode `0600`) |
+| OS | Settings |
+|---|---|
+| Windows | `%APPDATA%\ferrite\almanac.conf` |
+| macOS | `~/Library/Application Support/ferrite/almanac.conf` |
+| Linux | `$XDG_CONFIG_HOME/ferrite/almanac.conf` (or `~/.config/…`) |
 
 ```ini
 scheme = ferrite      # ferrite mono graphite slate concrete harbor cyanotype phosphor verdigris bruise
@@ -119,10 +112,9 @@ Environment variables override the files:
 
 | Variable | Effect |
 |---|---|
-| `OPENWEATHER_API_KEY` | Used instead of the saved key. |
 | `ALMANAC_LOCATION` | Used when no location is set in Settings. |
-| `ALMANAC_SKY` | Previews a sky without a key: `clear`, `clouds`, `rain`, `snow`, `fog` or `storm`. |
-| `FERRITE_*` | The shared look from [Lodestone](https://github.com/rwetz/ferrite-lodestone); wins over the saved scheme and appearance. |
+| `ALMANAC_SKY` | Previews a sky without live weather: `clear`, `clouds`, `rain`, `snow`, `fog` or `storm`. |
+| `FERRITE_*` | The shared look from [Lodestone](https://github.com/rwetz/ferrite-lodestone); provides defaults until the app saves its own preferences. |
 
 `ferrite-almanac --settings` starts with Settings open.
 
@@ -148,15 +140,14 @@ discover installed binaries.
 ```bash
 cargo test                    # the clock face, moon phases, sky scenes, weather parsing, settings
 cargo clippy --all-targets
-ALMANAC_SKY=storm cargo run   # try a sky without a key
+ALMANAC_SKY=storm cargo run   # try a sky without live weather
 ```
 
 - `src/almanac.rs`: the clock face, moon phase, parts of the day and ticker.
   All pure and unit-tested.
 - `src/sky.rs`: renders the sky film's frames.
-- `src/weather.rs`: OpenWeather config, fetching and parsing. The key never
-  appears in `Debug` output.
-- `src/settings.rs`: the settings and key files.
+- `src/weather.rs`: Open-Meteo config, fetching and parsing; no API key.
+- `src/settings.rs`: the settings file.
 - `src/main.rs`: the views. It follows ferrite-design's
   [AGENTS.md](https://github.com/rwetz/ferrite-design/blob/main/AGENTS.md).
 
