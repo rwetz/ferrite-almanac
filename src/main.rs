@@ -479,14 +479,14 @@ impl Render for Almanac {
         );
 
         let sky_meta = match &self.weather {
-            Some(w) => format!("{} Â· {:.0}{}", part.label(), w.temp, w.units.temp()),
+            Some(w) => format!("{} · {:.0}{}", part.label(), w.temp, w.units.temp()),
             None => part.label().to_string(),
         };
         let report: Option<(bool, String)> = match (&self.weather, &self.weather_note) {
             (Some(w), note) => Some((
                 note.is_some(),
                 format!(
-                    "{} Â· {} Â· feels {:.0}{} Â· wind {:.0} {} Â· {}% humidity",
+                    "{} · {} · feels {:.0}{} · wind {:.0} {} · {}% humidity",
                     w.place,
                     w.description,
                     w.feels,
@@ -548,7 +548,7 @@ impl Render for Almanac {
             div().flex().justify_center().child(ascii_cal(now.year(), now.month()).today(Some(now.day()))),
         );
 
-        let gear = Button::new("open-settings").icon(Icon::Sliders).ghost().small().tooltip("Settings Â· Ctrl+,").on_click(cx.listener(
+        let gear = Button::new("open-settings").icon(Icon::Sliders).ghost().small().tooltip("Settings · Ctrl+,").on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings_open = !this.settings_open;
                 cx.notify();
