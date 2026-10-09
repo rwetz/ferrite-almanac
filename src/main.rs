@@ -31,9 +31,13 @@ use almanac::{Moon, Part};
 use settings::Settings;
 use weather::{Conditions, Units, Weather};
 
-/// One font pixel of the big digits, and the gap carved out of it.
+/// One font pixel of the big digits at the designed size, the range it
+/// scales through with the window, and the gap carved out of each.
 const PIXEL: f32 = 20.;
+const PIXEL_RANGE: (f32, f32) = (12., 64.);
 const INSET: f32 = 2.;
+/// The side panels (moon, month) keep their width; the rest grows.
+const SIDE: f32 = 300.;
 const FRAMES: usize = 24;
 /// How often to ask for the weather, and how soon to retry after a failure.
 const WEATHER_EVERY: Duration = Duration::from_secs(10 * 60);
@@ -47,8 +51,9 @@ struct Almanac {
     settings: Settings,
     settings_open: bool,
     ghost: Vec<(usize, usize)>,
-    /// The sky film and what it was drawn for.
+    /// The sky film, its ink masks, and what it was drawn for.
     sky: Rc<[dither::Picture]>,
+    sky_masks: Rc<[dither::Picture]>,
     sky_key: Option<(Part, u32, Option<Conditions>)>,
     /// Live weather, when a location is set and the last fetch worked.
     weather: Option<Weather>,
@@ -101,6 +106,7 @@ impl Almanac {
             settings_open: first_run || std::env::args().any(|a| a == "--settings"),
             ghost: almanac::ghost(5),
             sky: Rc::from(Vec::new()),
+            sky_masks: Rc::from(Vec::new()),
             sky_key: None,
             weather: None,
             weather_note: None,
@@ -285,46 +291,50 @@ impl Almanac {
 
     fn redraw_sky(&mut self) {
         let scene = sky::Scene { part: self.part(), sun: self.sun_progress(), moon: self.moon(), weather: self.conditions() };
-        self.sky = sky::frames(scene, FRAMES).into();
+        let film = sky::frames(scene, FRAMES);
+        self.sky = film.frames.into();
+        self.sky_masks = film.masks.into();
         self.sky_key = Some(self.scene_key());
     }
 
     // ── Views ────────────────────────────────────────────────────────────
 
     /// The big digits: every possible segment drawn dim, the lit ones bright.
-    fn face(&self, cx: &App) -> impl IntoElement {
+    fn face(&self, pixel: f32, cx: &App) -> impl IntoElement {
         let p = palette(cx);
+        let inset = (INSET * pixel / PIXEL).round().max(1.);
         let lit = almanac::pixels(&almanac::face(self.now, self.settings.h24));
         // The colon blinks with the seconds, unless that's turned off.
         let colon = !self.settings.blink || self.now.second().is_multiple_of(2);
         let cell = |(x, y): (usize, usize), color| {
             div()
                 .absolute()
-                .left(px(x as f32 * PIXEL + INSET / 2.))
-                .top(px(y as f32 * PIXEL + INSET / 2.))
-                .size(px(PIXEL - INSET))
+                .left(px(x as f32 * pixel + inset / 2.))
+                .top(px(y as f32 * pixel + inset / 2.))
+                .size(px(pixel - inset))
                 .bg(color)
         };
         div()
             .relative()
             .flex_none()
-            .w(px(almanac::face_width(5) as f32 * PIXEL))
-            .h(px(5. * PIXEL))
+            .w(px(almanac::face_width(5) as f32 * pixel))
+            .h(px(5. * pixel))
             .children(self.ghost.iter().map(|&xy| cell(xy, hsla(p.line))))
             .children(lit.into_iter().filter(|&(x, _)| colon || !(12..17).contains(&x)).map(|xy| cell(xy, hsla(p.fg))))
     }
 
     /// Sixty cells: the seconds gone, the one now, the ones to come.
-    fn seconds(&self, cx: &App) -> impl IntoElement {
+    fn seconds(&self, pixel: f32, cx: &App) -> impl IntoElement {
         let p = palette(cx);
         let s = self.now.second() as usize;
-        div().flex().flex_row().items_end().gap(px(2.)).children((0..60).map(|i| {
+        let k = pixel / PIXEL;
+        div().flex().flex_row().items_end().gap(px((2. * k).round())).children((0..60).map(|i| {
             let color = match i.cmp(&s) {
                 std::cmp::Ordering::Less => p.line_strong,
                 std::cmp::Ordering::Equal => p.accent,
                 std::cmp::Ordering::Greater => p.line,
             };
-            div().w(px(7.)).h(px(if i.is_multiple_of(5) { 12. } else { 6. })).bg(hsla(color))
+            div().w(px((7. * k).round())).h(px((if i.is_multiple_of(5) { 12. } else { 6. } * k).round())).bg(hsla(color))
         }))
     }
 
@@ -395,6 +405,12 @@ impl Almanac {
                     .checked(s.seconds)
                     .on_change(cx.listener(|this, on: &bool, window, cx| this.change(|s| s.seconds = *on, window, cx))),
             )
+            .child(
+                switch("sky-colors")
+                    .label("Sky in colour")
+                    .checked(s.sky_colors)
+                    .on_change(cx.listener(|this, on: &bool, window, cx| this.change(|s| s.sky_colors = *on, window, cx))),
+            )
             .child(rule(Some("weather"), window, cx))
             .child(div().body(text::SM).text_color(hsla(p.fg_dim)).child(weather_status))
             .child(field("location", "Location").hint("Press Enter to apply").stacked().child(self.location.clone()))
@@ -419,7 +435,15 @@ impl Render for Almanac {
         let moon = self.moon();
         let part = self.part();
 
-        let mut readout = div().flex().flex_row().items_end().gap_4().child(self.face(cx));
+        // gpui has no zoom, so the clock sizes itself from the window: the
+        // digits take most of the width beside the moon, and about a third
+        // of the height. At the designed 1120×760 that's the old 20px.
+        let viewport = window.viewport_size();
+        let body_h = f32::from(viewport.height) - f32::from(chrome::TITLE_BAR_HEIGHT) - 160.;
+        let room_w = f32::from(viewport.width) - SIDE - 4. * f32::from(space::ROW);
+        let pixel = (room_w * 0.75 / almanac::face_width(5) as f32).min(body_h * 0.3 / 5.).floor().clamp(PIXEL_RANGE.0, PIXEL_RANGE.1);
+        let big = if pixel >= 2. * PIXEL { Scale::X2 } else { Scale::X1 };
+        let mut readout = div().flex().flex_row().items_end().gap_4().child(self.face(pixel, cx));
         if !self.settings.h24 {
             readout = readout.child(div().display(Scale::X2, window).text_color(hsla(p.fg_dim)).child(if now.hour() < 12 { "AM" } else { "PM" }));
         }
@@ -433,12 +457,12 @@ impl Render for Almanac {
                 .gap_4()
                 .py_4()
                 .child(readout)
-                .when(self.settings.seconds, |col| col.child(self.seconds(cx)))
-                .child(div().display(Scale::X1, window).text_color(hsla(p.fg_dim)).child(now.format("%A Â· %d %b %Y").to_string().to_uppercase())),
+                .when(self.settings.seconds, |col| col.child(self.seconds(pixel, cx)))
+                .child(div().display(big, window).text_color(hsla(p.fg_dim)).child(now.format("%A · %d %b %Y").to_string().to_uppercase())),
         );
 
         let disc = dither::Picture::from_fn(64, 64, move |u, v| moon.shade(u * 2. - 1., v * 2. - 1.).unwrap_or(0.));
-        let moon_panel = panel("Moon").meta(format!("{:.0}%", moon.illumination() * 100.)).w(px(300.)).child(
+        let moon_panel = panel("Moon").meta(format!("{:.0}%", moon.illumination() * 100.)).w(px(SIDE)).child(
             div()
                 .flex()
                 .flex_col()
@@ -476,19 +500,38 @@ impl Render for Almanac {
             (None, None) => None,
         };
         let (charset, fit) = sky::style(self.conditions());
+        let (frames, masks) = (self.sky.clone(), self.sky_masks.clone());
+        let inks: Vec<_> = if self.settings.sky_colors {
+            sky::natural_inks(p.tone == ferrite_design::tokens::Tone::Dark, part).into_iter().map(hsla).collect()
+        } else {
+            Vec::new()
+        };
+        let ink = hsla(p.fg_dim);
+        // The film is as many columns as fit the room the panel gives it,
+        // by width and by height (rows are cols × 0.35 / 2, 16px each).
+        let sky_film = responsive("sky-room", move |room, window, _| {
+            let cell = f32::from(display_size(Scale::X1, window));
+            let by_w = f32::from(room.width) / (cell / 2.);
+            let by_h = f32::from(room.height) / cell / sky::ROWS_PER_COL;
+            let cols = by_w.min(by_h).floor().max(24.) as usize;
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(ascii_film("sky", frames.clone()).cols(cols).charset(charset).fit(fit).fps(6).color(ink).inks(masks.clone(), inks.clone()))
+                .into_any_element()
+        })
+        .flex_1()
+        .min_h_0()
+        .w_full();
         let sky_panel = panel("Sky")
             .meta(sky_meta)
             .flex_1()
             .min_w_0()
-            .child(
-                div()
-                    .flex()
-                    .justify_center()
-                    .overflow_hidden()
-                    .child(ascii_film("sky", self.sky.clone()).cols(72).charset(charset).fit(fit).fps(6).color(hsla(p.fg_dim))),
-            )
+            .child(sky_film)
             .when_some(report, |panel, (warn, line)| {
-                panel.child(div().flex_1()).child(
+                panel.child(
                     div()
                         .flex()
                         .flex_row()
@@ -501,7 +544,7 @@ impl Render for Almanac {
                         .child(line),
                 )
             });
-        let month = panel(now.format("%B").to_string()).meta(now.year().to_string()).w(px(300.)).child(
+        let month = panel(now.format("%B").to_string()).meta(now.year().to_string()).w(px(SIDE)).child(
             div().flex().justify_center().child(ascii_cal(now.year(), now.month()).today(Some(now.day()))),
         );
 
@@ -540,7 +583,11 @@ impl Render for Almanac {
                         .p(space::ROW)
                         .child(div().flex().flex_row().gap(space::ROW).child(clock).child(moon_panel))
                         .child(div().flex().flex_row().flex_1().min_h_0().gap(space::ROW).child(sky_panel).child(month))
-                        .child(div().flex().justify_center().child(marquee("ticker", almanac::ticker(now, moon)).cells(110).color(hsla(p.fg_dim)))),
+                        .child(div().flex().justify_center().child(
+                            marquee("ticker", almanac::ticker(now, moon))
+                                .cells((f32::from(viewport.width) / (f32::from(display_size(Scale::X1, window)) / 2.) * 0.9) as usize)
+                                .color(hsla(p.fg_dim)),
+                        )),
                 )
                 .child(drawer)
                 .child(
@@ -560,9 +607,10 @@ fn main() {
     gpui_platform::application().run(|cx: &mut App| {
         ferrite_design::init(Appearance::Dark, cx);
         cx.bind_keys([KeyBinding::new("ctrl-shift-p", TogglePalette, None), KeyBinding::new("ctrl-,", OpenSettings, None)]);
-        let options = chrome::window_options("Almanac", size(px(1120.), px(760.)), cx);
+        let options = chrome::remembered_window_options("almanac", "Almanac", size(px(1120.), px(760.)), cx);
         cx.open_window(options, |window, cx| {
             chrome::square_corners(window);
+            chrome::remember_window("almanac", window, cx);
             chrome::power_off_on_close(window, cx);
             cx.new(|cx| Almanac::new(window, cx))
         })

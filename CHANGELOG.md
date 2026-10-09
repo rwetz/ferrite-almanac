@@ -4,6 +4,27 @@ All notable changes to Almanac are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-07
+
+### Added
+
+- The sky in colour: a yellow sun, white clouds and moon, blue rain, green
+  hills, an orange glow at dawn and dusk. Fixed natural colours, tuned for
+  dark and light pages; Settings → "Sky in colour" turns it back to the
+  scheme's one ink.
+- The window reopens at the size, place and state (maximized, fullscreen)
+  it was closed in.
+
+### Fixed
+
+- Maximized or fullscreen, the clock no longer sits small in an empty
+  window: the digits, seconds rail and date grow with it, the sky fills its
+  panel, and the ticker spans the width.
+- The first window fits the screen (it was cut off on small or scaled
+  displays).
+- The scheme picker in Settings opens (its menu was drawn under the
+  drawer; fixed in ferrite-design).
+
 ## [0.1.1] - 2026-10-07
 
 ### Fixed
