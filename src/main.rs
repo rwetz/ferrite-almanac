@@ -8,7 +8,8 @@
 //!
 //!     cargo run
 //!     cargo run -- --settings           # open straight into Settings
-//!     ALMANAC_SKY=snow cargo run     # preview a sky: clear clouds rain snow fog storm
+//!     ALMANAC_SKY=snow cargo run     # preview a sky: sunny partly cloudy rain storm snow blizzard fog
+//!     ALMANAC_PART=night ALMANAC_MOON=15 cargo run   # preview a night, a phase (days since new)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -252,6 +253,17 @@ impl Almanac {
 
     /// The part of the day: from the real sun when the weather knows it.
     fn part(&self) -> Part {
+        // `ALMANAC_PART=night` previews another part of the day.
+        let preview = std::env::var("ALMANAC_PART").ok().and_then(|p| match p.to_lowercase().as_str() {
+            "night" => Some(Part::Night),
+            "dawn" => Some(Part::Dawn),
+            "day" => Some(Part::Day),
+            "dusk" => Some(Part::Dusk),
+            _ => None,
+        });
+        if let Some(part) = preview {
+            return part;
+        }
         match &self.weather {
             Some(w) if w.sunset > w.sunrise => Part::from_sun(Local::now().timestamp(), w.sunrise, w.sunset),
             _ => Part::of(self.now.hour()),
@@ -267,7 +279,11 @@ impl Almanac {
     }
 
     fn moon(&self) -> Moon {
-        Moon::at_unix(Local::now().timestamp())
+        // `ALMANAC_MOON=<days since new>` previews a phase (0 new, 15 full).
+        match std::env::var("ALMANAC_MOON").ok().and_then(|d| d.parse::<f64>().ok()) {
+            Some(age) => Moon { age: age.rem_euclid(almanac::SYNODIC) },
+            None => Moon::at_unix(Local::now().timestamp()),
+        }
     }
 
     fn tick(&mut self, cx: &mut Context<Self>) {
@@ -289,9 +305,13 @@ impl Almanac {
         (self.part(), self.now.hour(), self.conditions())
     }
 
+    fn scene(&self) -> sky::Scene {
+        let hour = self.now.hour() as f32 + self.now.minute() as f32 / 60.;
+        sky::Scene { part: self.part(), sun: self.sun_progress(), moon: self.moon(), hour, weather: self.conditions() }
+    }
+
     fn redraw_sky(&mut self) {
-        let scene = sky::Scene { part: self.part(), sun: self.sun_progress(), moon: self.moon(), weather: self.conditions() };
-        let film = sky::frames(scene, FRAMES);
+        let film = sky::frames(self.scene(), FRAMES);
         self.sky = film.frames.into();
         self.sky_masks = film.masks.into();
         self.sky_key = Some(self.scene_key());
@@ -478,8 +498,12 @@ impl Render for Almanac {
                 })),
         );
 
+        // Name the sky only when it comes from real (or previewed) weather;
+        // without it the picture is just a fair-weather illustration.
+        let screen = sky::Screen::of(&self.scene()).label(part);
         let sky_meta = match &self.weather {
-            Some(w) => format!("{} · {:.0}{}", part.label(), w.temp, w.units.temp()),
+            Some(w) => format!("{screen} · {:.0}{}", w.temp, w.units.temp()),
+            None if self.conditions().is_some() => screen.to_string(),
             None => part.label().to_string(),
         };
         let report: Option<(bool, String)> = match (&self.weather, &self.weather_note) {
@@ -544,6 +568,10 @@ impl Render for Almanac {
                         .child(line),
                 )
             });
+        // The month never gets less than its whole grid: a title, the weekdays
+        // and up to six weeks of display rows, under the panel's header and
+        // padding.
+        let month_h = 8. * f32::from(display_size(Scale::X1, window)) + 24. + 24. + 2.;
         let month = panel(now.format("%B").to_string()).meta(now.year().to_string()).w(px(SIDE)).child(
             div().flex().justify_center().child(ascii_cal(now.year(), now.month()).today(Some(now.day()))),
         );
@@ -574,20 +602,23 @@ impl Render for Almanac {
                 .child(self.toaster.clone())
                 .child(title_bar("Almanac").child(gear))
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h_0()
-                        .gap(space::ROW)
-                        .p(space::ROW)
-                        .child(div().flex().flex_row().gap(space::ROW).child(clock).child(moon_panel))
-                        .child(div().flex().flex_row().flex_1().min_h_0().gap(space::ROW).child(sky_panel).child(month))
-                        .child(div().flex().justify_center().child(
-                            marquee("ticker", almanac::ticker(now, moon))
-                                .cells((f32::from(viewport.width) / (f32::from(display_size(Scale::X1, window)) / 2.) * 0.9) as usize)
-                                .color(hsla(p.fg_dim)),
-                        )),
+                    // Short windows scroll rather than squeeze the month
+                    // under the ticker.
+                    scroll_area("almanac-content").flex_1().min_h_0().child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_h_full()
+                            .gap(space::ROW)
+                            .p(space::ROW)
+                            .child(div().flex().flex_row().flex_none().gap(space::ROW).child(clock).child(moon_panel))
+                            .child(div().flex().flex_row().flex_1().min_h(px(month_h)).gap(space::ROW).child(sky_panel).child(month))
+                            .child(div().flex().flex_none().justify_center().child(
+                                marquee("ticker", almanac::ticker(now, moon))
+                                    .cells((f32::from(viewport.width) / (f32::from(display_size(Scale::X1, window)) / 2.) * 0.9) as usize)
+                                    .color(hsla(p.fg_dim)),
+                            )),
+                    ),
                 )
                 .child(drawer)
                 .child(

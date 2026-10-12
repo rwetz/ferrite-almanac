@@ -8,6 +8,8 @@ pub enum Kind {
     Clouds,
     Rain,
     Snow,
+    /// Snow on a gale.
+    Blizzard,
     Fog,
     Storm,
 }
@@ -97,21 +99,66 @@ pub fn config(location: &str, units: Units) -> Result<Option<Config>, String> {
 
 /// A sky to preview without a key: `ALMANAC_SKY=rain` and so on.
 pub fn preview() -> Option<Conditions> {
-    let kind = match std::env::var("ALMANAC_SKY").ok()?.to_lowercase().as_str() {
-        "clear" => Kind::Clear,
-        "clouds" | "cloudy" => Kind::Clouds,
-        "rain" => Kind::Rain,
-        "snow" => Kind::Snow,
-        "fog" | "mist" => Kind::Fog,
-        "storm" | "thunderstorm" => Kind::Storm,
+    let (kind, cover) = match std::env::var("ALMANAC_SKY").ok()?.to_lowercase().as_str() {
+        "clear" | "sunny" => (Kind::Clear, 0.),
+        "partly" | "partly-sunny" | "partly-cloudy" => (Kind::Clouds, 0.45),
+        "clouds" | "cloudy" | "overcast" => (Kind::Clouds, 0.95),
+        "rain" => (Kind::Rain, 0.9),
+        "snow" => (Kind::Snow, 0.9),
+        "blizzard" => (Kind::Blizzard, 1.),
+        "fog" | "mist" => (Kind::Fog, 0.9),
+        "storm" | "thunderstorm" => (Kind::Storm, 1.),
         _ => return None,
     };
-    let cover = match kind {
-        Kind::Clear => 0.,
-        Kind::Clouds => 0.6,
-        _ => 0.9,
-    };
     Some(Conditions { kind, cover, intensity: 0.7 })
+}
+
+/// Wind, in m/s, that turns snow into a blizzard; heavy snow needs less.
+const BLIZZARD_WIND: f64 = 15.;
+const HEAVY_SNOW_WIND: f64 = 10.;
+
+/// What the sky is doing, from the WMO code and the measurements: any
+/// precipitation at all is rain (or snow, below freezing) whatever the code
+/// says, and strong wind turns snow into a blizzard.
+fn classify(code: u64, precipitation: f64, temp_c: f64, wind_ms: f64) -> Kind {
+    let kind = match kind_of(code) {
+        Kind::Clear | Kind::Clouds if precipitation > 0. => {
+            if temp_c <= 0.5 { Kind::Snow } else { Kind::Rain }
+        }
+        kind => kind,
+    };
+    let heavy = matches!(code, 75 | 86);
+    if kind == Kind::Snow && (wind_ms >= BLIZZARD_WIND || (heavy && wind_ms >= HEAVY_SNOW_WIND)) { Kind::Blizzard } else { kind }
+}
+
+/// Words for the sky. For the dry codes the cloud cover decides, so the
+/// report never says "cloudy" over a mostly clear sky or the reverse.
+fn describe(code: u64, kind: Kind, cover: f64) -> &'static str {
+    match (kind, code) {
+        (Kind::Blizzard, _) => "blizzard",
+        (Kind::Clear | Kind::Clouds, _) if cover < 0.25 => "clear",
+        (Kind::Clear | Kind::Clouds, _) if cover < 0.7 => "partly cloudy",
+        (Kind::Clear | Kind::Clouds, _) => "overcast",
+        (_, 45 | 48) => "fog",
+        (_, 51..=55) => "drizzle",
+        (_, 56 | 57) => "freezing drizzle",
+        (_, 61) => "light rain",
+        (_, 63) => "rain",
+        (_, 65) => "heavy rain",
+        (_, 66 | 67) => "freezing rain",
+        (_, 71) => "light snow",
+        (_, 73) => "snow",
+        (_, 75) => "heavy snow",
+        (_, 77) => "snow grains",
+        (_, 80..=82) => "rain showers",
+        (_, 85 | 86) => "snow showers",
+        (_, 95) => "thunderstorm",
+        (_, 96..=99) => "thunderstorm with hail",
+        (Kind::Snow, _) => "light snow",
+        (Kind::Rain, _) => "light rain",
+        (Kind::Fog, _) => "fog",
+        (Kind::Storm, _) => "thunderstorm",
+    }
 }
 
 /// WMO codes used by Open-Meteo.
@@ -134,28 +181,31 @@ pub fn parse(json: &str, units: Units) -> Result<Weather, String> {
     let c = &v["current"];
     let number = |name: &str| c[name].as_f64().ok_or_else(|| format!("missing {name} in weather response"));
     let code = c["weather_code"].as_u64().ok_or("missing weather code")?;
-    let kind = kind_of(code);
-    let description = match kind {
-        Kind::Clear => "clear",
-        Kind::Clouds => "cloudy",
-        Kind::Fog => "fog",
-        Kind::Rain => "rain",
-        Kind::Snow => "snow",
-        Kind::Storm => "thunderstorm",
-    };
     let precipitation = c["precipitation"].as_f64().unwrap_or(0.);
+    let temp = number("temperature_2m")?;
+    let wind = number("wind_speed_10m")?;
+    let (temp_c, wind_ms) = match units {
+        Units::Metric => (temp, wind),
+        Units::Imperial => ((temp - 32.) * 5. / 9., wind * 0.447_04),
+    };
+    let kind = classify(code, precipitation, temp_c, wind_ms);
+    let cover = (number("cloud_cover")? / 100.).clamp(0., 1.);
     Ok(Weather {
         conditions: Conditions {
             kind,
-            cover: (number("cloud_cover")? / 100.).clamp(0., 1.) as f32,
-            intensity: if matches!(kind, Kind::Rain | Kind::Snow | Kind::Storm) { (precipitation / 5.).clamp(0.2, 1.) as f32 } else { 0. },
+            cover: cover as f32,
+            intensity: if matches!(kind, Kind::Rain | Kind::Snow | Kind::Blizzard | Kind::Storm) {
+                (precipitation / 5.).clamp(0.2, 1.) as f32
+            } else {
+                0.
+            },
         },
         place: String::new(),
-        description: description.into(),
-        temp: number("temperature_2m")? as f32,
+        description: describe(code, kind, cover).into(),
+        temp: temp as f32,
         feels: number("apparent_temperature")? as f32,
         humidity: number("relative_humidity_2m")? as u32,
-        wind: number("wind_speed_10m")? as f32,
+        wind: wind as f32,
         sunrise: v["daily"]["sunrise"][0].as_i64().ok_or("missing sunrise")?,
         sunset: v["daily"]["sunset"][0].as_i64().ok_or("missing sunset")?,
         units,
@@ -223,6 +273,32 @@ mod tests {
     #[test]
     fn wmo_codes_cover_each_sky() {
         assert_eq!([0, 3, 45, 63, 73, 95].map(kind_of), [Kind::Clear, Kind::Clouds, Kind::Fog, Kind::Rain, Kind::Snow, Kind::Storm]);
+    }
+    #[test]
+    fn the_sky_is_read_from_the_measurements() {
+        // A dry code with rain falling is rain; below freezing, snow.
+        assert_eq!(classify(3, 0.2, 8., 3.), Kind::Rain);
+        assert_eq!(classify(2, 0.2, -3., 3.), Kind::Snow);
+        assert_eq!(classify(3, 0., 8., 3.), Kind::Clouds);
+        // Snow on a gale is a blizzard; heavy snow needs less wind.
+        assert_eq!(classify(73, 1., -5., 18.), Kind::Blizzard);
+        assert_eq!(classify(75, 1., -5., 11.), Kind::Blizzard);
+        assert_eq!(classify(73, 1., -5., 11.), Kind::Snow);
+        // "Mainly clear" under a grey sky is reported as it looks.
+        assert_eq!(describe(1, Kind::Clouds, 0.93), "overcast");
+        assert_eq!(describe(3, Kind::Clouds, 0.1), "clear");
+        assert_eq!(describe(65, Kind::Rain, 1.), "heavy rain");
+    }
+    #[test]
+    fn imperial_wind_and_temperature_are_converted() {
+        // Drizzle at 30°: below freezing in Fahrenheit, warm in Celsius.
+        let json = r#"{"current":{"temperature_2m":30,"apparent_temperature":25,"relative_humidity_2m":80,"wind_speed_10m":20,"weather_code":3,"cloud_cover":100,"precipitation":0.4},"daily":{"sunrise":[1791374400],"sunset":[1791415800]}}"#;
+        // 20 mph is a breeze; 20 m/s is a gale.
+        assert_eq!(parse(json, Units::Imperial).unwrap().conditions.kind, Kind::Snow);
+        assert_eq!(parse(json, Units::Metric).unwrap().conditions.kind, Kind::Rain);
+        let snowing = json.replace(r#""weather_code":3"#, r#""weather_code":73"#);
+        assert_eq!(parse(&snowing, Units::Imperial).unwrap().conditions.kind, Kind::Snow);
+        assert_eq!(parse(&snowing, Units::Metric).unwrap().conditions.kind, Kind::Blizzard);
     }
     #[test]
     fn locations_are_validated() {

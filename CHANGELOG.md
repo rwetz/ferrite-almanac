@@ -4,6 +4,28 @@ All notable changes to Almanac are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-12
+
+### Added
+
+- A sky screen for each kind of weather: sunny, partly sunny (clouds pass
+  over the sun), cloudy (a low grey ceiling, no sun), rain, storm (two
+  lightning strikes a loop), snow, blizzard, and fog.
+- Two clear nights: moonlit, with the moon at its real phase and place in
+  the sky, and moonless, with more stars, the Milky Way and a meteor.
+- `ALMANAC_PART` and `ALMANAC_MOON` preview a part of the day and a phase.
+
+### Changed
+
+- Cloud cover decides the sky and the words for it, so "cloudy" no longer
+  shows a mostly clear sky with the sun out. Any measured precipitation
+  shows as rain, or snow below freezing; snow on a gale is a blizzard.
+- The Sky panel's header names the sky ("CLOUDY · 50°F").
+
+### Fixed
+
+- Short windows scroll instead of squeezing the month under the ticker.
+
 ## [0.3.1] - 2026-10-09
 
 ### Changed
